@@ -610,6 +610,43 @@ class MNBusinessScraper:
 
         return None
 
+    async def scrape_business_by_guid(self, guid: str) -> dict | None:
+        """
+        Scrape a single business by GUID (for search results).
+        Returns business data dict or None if not found.
+        """
+        for attempt in range(config.MAX_RETRIES):
+            try:
+                # Navigate directly to the business details page
+                url = f'https://mblsportal.sos.mn.gov/Business/SearchDetails?filingGuid={guid}'
+                await self.page.goto(url, wait_until='networkidle')
+                await asyncio.sleep(0.5)
+
+                # Check for valid page
+                title = await self.page.title()
+                if 'Details' not in title:
+                    return None
+
+                # Get business name from h2
+                business_name = ''
+                h2 = await self.page.query_selector('h2')
+                if h2:
+                    business_name = (await h2.inner_text()).strip()
+
+                # Extract data using the existing method (use GUID as file_number)
+                data = await self.extract_business_data(guid, business_name)
+                return data
+
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for GUID {guid}: {e}")
+                if attempt < config.MAX_RETRIES - 1:
+                    await asyncio.sleep(config.RETRY_DELAY)
+                else:
+                    logger.error(f"All retries failed for GUID {guid}")
+                    return None
+
+        return None
+
     async def add_delay(self):
         """Add rate-limiting delay with jitter."""
         delay = config.REQUEST_DELAY + random.uniform(0, config.DELAY_JITTER)
