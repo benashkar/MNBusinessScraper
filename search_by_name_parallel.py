@@ -4,12 +4,15 @@ Parallel Alphabetical MN Business Scraper
 
 Searches for LLCs and Corporations by name patterns (aa, ab, ac, ... zz)
 using multiple parallel workers. Focuses on recent filings (2024-2026).
+
+Auto-saves to local and GitHub every 4 hours.
 """
 
 import argparse
 import asyncio
 import json
 import string
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,8 +29,22 @@ from mn_scraper import MNBusinessScraper
 # Target years for recent filings
 TARGET_YEARS = ['2024', '2025', '2026']
 
-# Business type filters
-BUSINESS_TYPE_KEYWORDS = ['LLC', 'L.L.C.', 'CORPORATION', 'CORP', 'INC', 'INCORPORATED']
+# Business type filters (for name search - broad to catch potential matches)
+BUSINESS_TYPE_KEYWORDS = ['LLC', 'L.L.C.', 'CORPORATION', 'CORP', 'INC', 'INCORPORATED', 'NONPROFIT', 'NON-PROFIT']
+
+# Target business types to SAVE (exact match on business_type field)
+TARGET_BUSINESS_TYPES = [
+    'Limited Liability Company (Domestic)',
+    'Limited Liability Company (Foreign)',
+    'Business Corporation (Domestic)',
+    'Business Corporation (Foreign)',
+    'Nonprofit Corporation (Domestic)',
+    'Nonprofit Corporation (Foreign)',
+]
+
+# Auto-save interval (4 hours in seconds)
+AUTO_SAVE_INTERVAL = 4 * 60 * 60
+last_save_time = None
 
 
 def generate_patterns():
@@ -37,6 +54,117 @@ def generate_patterns():
         for c2 in string.ascii_lowercase:
             patterns.append(c1 + c2)
     return patterns
+
+
+def run_auto_save():
+    """Merge all worker outputs and push to GitHub."""
+    global last_save_time
+
+    repo_dir = Path(__file__).parent
+    output_dir = repo_dir / 'output'
+    data_dir = repo_dir / 'data'
+    data_dir.mkdir(exist_ok=True)
+
+    print(f"\n{'='*60}")
+    print(f"AUTO-SAVE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print('='*60)
+
+    # Merge all alpha worker CSV files
+    dfs = []
+    for i in range(20):
+        f = output_dir / f'businesses_alpha_worker_{i}.csv'
+        if f.exists():
+            try:
+                df = pd.read_csv(f, low_memory=False)
+                dfs.append(df)
+                print(f"  Worker {i}: {len(df)} records")
+            except Exception as e:
+                print(f"  Worker {i}: Error - {e}")
+
+    if not dfs:
+        print("No data to save!")
+        return
+
+    merged = pd.concat(dfs, ignore_index=True)
+
+    # Deduplicate
+    if 'file_number' in merged.columns:
+        merged = merged.drop_duplicates(subset=['file_number'], keep='last')
+
+    print(f"Total unique records: {len(merged)}")
+
+    # Load existing data and combine
+    existing_file = data_dir / 'businesses.csv'
+    if existing_file.exists():
+        try:
+            existing = pd.read_csv(existing_file, low_memory=False)
+            print(f"Existing records: {len(existing)}")
+            merged = pd.concat([existing, merged], ignore_index=True)
+            merged = merged.drop_duplicates(subset=['file_number'], keep='last')
+            print(f"Combined unique: {len(merged)}")
+        except Exception as e:
+            print(f"Error loading existing: {e}")
+
+    # Save CSV
+    merged.to_csv(data_dir / 'businesses.csv', index=False)
+    print(f"Saved {len(merged)} records to data/businesses.csv")
+
+    # Create summary
+    summary = {
+        "last_updated": datetime.now().isoformat(),
+        "total_businesses": len(merged),
+        "target_types": TARGET_BUSINESS_TYPES,
+    }
+    if 'filing_date' in merged.columns:
+        years = merged['filing_date'].astype(str).str[:4]
+        summary['by_year'] = {k: int(v) for k, v in years.value_counts().head(10).items() if k != 'nan'}
+    if 'business_type' in merged.columns:
+        summary['by_type'] = {k: int(v) for k, v in merged['business_type'].value_counts().items()}
+
+    with open(data_dir / 'summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    # Git commit and push
+    try:
+        import os
+        original_dir = os.getcwd()
+        os.chdir(repo_dir)
+
+        subprocess.run(['git', 'add', 'data/'], capture_output=True)
+        result = subprocess.run(['git', 'status', '--porcelain', 'data/'], capture_output=True, text=True)
+
+        if result.stdout.strip():
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            msg = f"Auto-save: {len(merged)} records ({timestamp})"
+            subprocess.run(['git', 'commit', '-m', msg], capture_output=True)
+            push_result = subprocess.run(['git', 'push'], capture_output=True, text=True)
+            if push_result.returncode == 0:
+                print("Pushed to GitHub successfully")
+            else:
+                print(f"Push error: {push_result.stderr}")
+        else:
+            print("No changes to commit")
+
+        os.chdir(original_dir)
+    except Exception as e:
+        print(f"Git error: {e}")
+
+    last_save_time = datetime.now()
+    print(f"Auto-save complete. Next save in 4 hours.")
+    print('='*60 + '\n')
+
+
+async def auto_save_task():
+    """Background task that saves every 4 hours."""
+    global last_save_time
+    last_save_time = datetime.now()
+
+    while True:
+        await asyncio.sleep(AUTO_SAVE_INTERVAL)
+        try:
+            run_auto_save()
+        except Exception as e:
+            print(f"Auto-save error: {e}")
 
 
 async def search_by_name(search_term: str, page, max_results: int = 500):
@@ -202,9 +330,12 @@ async def worker_scrape(worker_id: int, patterns: list, headless: bool = True):
                             filing_date = data.get('filing_date', '')
                             filing_year = filing_date[:4] if filing_date else ''
 
-                            if filing_year in TARGET_YEARS:
+                            # Check if it's from target years AND target business types
+                            business_type = data.get('business_type', '')
+
+                            if filing_year in TARGET_YEARS and business_type in TARGET_BUSINESS_TYPES:
                                 recent_count += 1
-                                print(f"[Worker {worker_id}] [RECENT {filing_year}] {data['business_name']}")
+                                print(f"[Worker {worker_id}] [SAVED {filing_year}] {data['business_name']} ({business_type})")
 
                                 # Save to CSV
                                 df = pd.DataFrame([data])
@@ -214,6 +345,9 @@ async def worker_scrape(worker_id: int, patterns: list, headless: bool = True):
                                     df.to_csv(output_file, mode='a', header=False, index=False)
 
                                 found_count += 1
+                            elif filing_year in TARGET_YEARS:
+                                # Log skipped business types for debugging
+                                print(f"[Worker {worker_id}] [SKIP] {data['business_name']} (type: {business_type})")
 
                             processed_guids.add(guid)
 
@@ -278,7 +412,10 @@ async def run_parallel(num_workers: int, headless: bool = True):
     print("=" * 70)
     print(f"PARALLEL ALPHABETICAL SCRAPER - {num_workers} WORKERS")
     print(f"Target Years: {', '.join(TARGET_YEARS)}")
-    print(f"Business Types: LLC, Corporation, Inc")
+    print(f"Target Business Types:")
+    for bt in TARGET_BUSINESS_TYPES:
+        print(f"  - {bt}")
+    print(f"Auto-save: Every 4 hours to local + GitHub")
     print("=" * 70)
     for i, wp in enumerate(worker_patterns):
         print(f"  Worker {i}: patterns {wp[0]} - {wp[-1]} ({len(wp)} patterns)")
@@ -291,8 +428,17 @@ async def run_parallel(num_workers: int, headless: bool = True):
         for i in range(num_workers)
     ]
 
+    # Start auto-save background task
+    save_task = asyncio.create_task(auto_save_task())
+
     # Run all workers concurrently
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        save_task.cancel()
+        # Run final save when scraping completes
+        print("\nScraping complete. Running final save...")
+        run_auto_save()
 
     # Summary
     print("\n" + "=" * 70)
