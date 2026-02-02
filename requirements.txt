@@ -1,2 +1,61 @@
+# ==============================================================================
+# MINNESOTA BUSINESS SCRAPER - PYTHON DEPENDENCIES
+# ==============================================================================
+#
+# Install all dependencies with:
+#     pip install -r requirements.txt
+#
+# For junior developers:
+# ----------------------
+# These are the Python packages this project needs. Each line specifies a
+# package name and optionally a minimum version (>=X.Y.Z means "version X.Y.Z
+# or higher").
+#
+# ==============================================================================
+
+# -----------------------------------------------------------------------------
+# CORE SCRAPING DEPENDENCIES
+# -----------------------------------------------------------------------------
+
+# Playwright - Browser automation library
+# Used to control Chrome/Chromium for scraping JavaScript-rendered pages
+# Docs: https://playwright.dev/python/
 playwright>=1.40.0
+
+# Pandas - Data analysis library
+# Used for CSV file handling and data manipulation
+# Docs: https://pandas.pydata.org/
 pandas>=2.0.0
+
+# -----------------------------------------------------------------------------
+# WEB DASHBOARD DEPENDENCIES
+# -----------------------------------------------------------------------------
+
+# Flask - Lightweight web framework
+# Used for the monitoring dashboard
+# Docs: https://flask.palletsprojects.com/
+flask>=3.0.0
+
+# -----------------------------------------------------------------------------
+# TESTING DEPENDENCIES
+# -----------------------------------------------------------------------------
+
+# Pytest - Testing framework
+# Used for running unit tests
+# Docs: https://docs.pytest.org/
+pytest>=7.0.0
+
+# Pytest-cov - Test coverage plugin
+# Used for measuring code coverage
+# Docs: https://pytest-cov.readthedocs.io/
+pytest-cov>=4.0.0
+
+# -----------------------------------------------------------------------------
+# OPTIONAL DEPENDENCIES (uncomment if needed)
+# -----------------------------------------------------------------------------
+
+# requests - HTTP library (alternative to urllib for alerts)
+# requests>=2.31.0
+
+# python-dotenv - Load environment variables from .env file
+# python-dotenv>=1.0.0

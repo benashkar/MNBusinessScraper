@@ -1,0 +1,137 @@
+# ==============================================================================
+# MINNESOTA BUSINESS SCRAPER - DOCKER COMPOSE
+# ==============================================================================
+#
+# Docker Compose makes it easy to run multiple containers together and
+# configure them with a simple YAML file.
+#
+# WHAT IS DOCKER COMPOSE?
+# -----------------------
+# Instead of typing long docker run commands, you define your services in this
+# file and run them with: docker-compose up
+#
+# USAGE:
+# ------
+#     # Start the dashboard
+#     docker-compose up dashboard
+#
+#     # Start the scraper
+#     docker-compose up scraper
+#
+#     # Start both in background
+#     docker-compose up -d
+#
+#     # View logs
+#     docker-compose logs -f scraper
+#
+#     # Stop everything
+#     docker-compose down
+#
+# FOR JUNIOR DEVELOPERS:
+# ----------------------
+# This file defines "services" - each service is a container configuration.
+# Key concepts:
+# - build: Where to find the Dockerfile
+# - volumes: Directories shared between host and container
+# - ports: Network ports to expose
+# - environment: Environment variables to set
+# - command: The command to run (overrides Dockerfile CMD)
+#
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # DASHBOARD SERVICE
+  # ===========================================================================
+  # The web dashboard for monitoring scraping progress
+  dashboard:
+    build: .
+    container_name: mn-scraper-dashboard
+    ports:
+      # Map port 5000 in container to port 5000 on host
+      # Access at http://localhost:5000
+      - "5000:5000"
+    volumes:
+      # Mount data directories so dashboard can read the CSV files
+      - ./data:/app/data
+      - ./output:/app/output
+      # Mount progress files
+      - ./:/app/progress:ro
+    environment:
+      # Python settings
+      - PYTHONUNBUFFERED=1
+    command: python dashboard.py --host 0.0.0.0 --port 5000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================================================================
+  # SCRAPER SERVICE
+  # ===========================================================================
+  # The main scraper that collects business data
+  scraper:
+    build: .
+    container_name: mn-scraper-worker
+    volumes:
+      # Mount data directories for output
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+      # Mount progress files (read-write)
+      - ./:/app/workdir
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HEADLESS=true
+      # Alert configuration (set these in .env file or here)
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
+    working_dir: /app/workdir
+    # Default command - override with docker-compose run scraper python <script>
+    command: >
+      python search_by_name_parallel.py
+      --workers 4
+      --year 2022
+    # Don't auto-restart scraper - it should complete and stop
+    restart: "no"
+    # Scraper depends on volumes being mounted
+    depends_on: []
+
+  # ===========================================================================
+  # TEST RUNNER SERVICE
+  # ===========================================================================
+  # Run tests in a container
+  tests:
+    build: .
+    container_name: mn-scraper-tests
+    volumes:
+      - ./:/app/workdir
+    working_dir: /app/workdir
+    command: pytest tests/ -v
+    # Tests run once and exit
+    restart: "no"
+
+# ==============================================================================
+# VOLUMES (Optional named volumes for persistence)
+# ==============================================================================
+# Uncomment if you prefer named volumes over bind mounts
+# volumes:
+#   scraper-data:
+#   scraper-output:
+#   scraper-logs:
+
+# ==============================================================================
+# NETWORKS (Optional custom network)
+# ==============================================================================
+# Uncomment for custom networking
+# networks:
+#   scraper-network:
+#     driver: bridge
